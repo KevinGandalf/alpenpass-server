@@ -67,27 +67,34 @@ while :; do
         ip link set "$iface" up
         echo "✅ $iface aktiviert mit $ip_cidr"
 
-        # Routing-Tabelle und ip rule nur erstellen, wenn Gateway angegeben wurde
-        if [ -n "$gw" ]; then
-            TABLE_NAME="$iface"
+	# Routing-Tabelle und ip rule nur erstellen, wenn Gateway angegeben wurde
+	if [ -n "$gw" ]; then
+    	    TABLE_NAME="$iface"
 
-            # Prüfen ob Tabelle in /etc/iproute2/rt_tables existiert, sonst hinzufügen
-            if ! grep -qw "$TABLE_NAME" "$RT_TABLES_FILE"; then
-                MAX_ID=$(awk '$1 ~ /^[0-9]+$/ {print $1}' "$RT_TABLES_FILE" | sort -n | tail -n1)
-                [ -z "$MAX_ID" ] && MAX_ID=100 || MAX_ID=$((MAX_ID + 1))
-                echo "$MAX_ID    $TABLE_NAME" >> "$RT_TABLES_FILE"
-                echo "🧭 Routing-Tabelle '$TABLE_NAME' ($MAX_ID) eingetragen."
-            fi
+    	   # Prüfen ob Tabelle in /etc/iproute2/rt_tables existiert, sonst hinzufügen
+    	   if ! grep -qw "$TABLE_NAME" "$RT_TABLES_FILE"; then
+              MAX_ID=$(awk '$1 ~ /^[0-9]+$/ {print $1}' "$RT_TABLES_FILE" | sort -n | tail -n1)
+              [ -z "$MAX_ID" ] && MAX_ID=100 || MAX_ID=$((MAX_ID + 1))
+              echo "$MAX_ID    $TABLE_NAME" >> "$RT_TABLES_FILE"
+              echo "🧭 Routing-Tabelle '$TABLE_NAME' ($MAX_ID) eingetragen."
+           fi
 
-            # Default-Route nur in der Routing-Tabelle setzen
-            ip route add default via "$gw" dev "$iface" table "$TABLE_NAME" 2>/dev/null || true
-            echo "🛣️  Default-Route via $gw in Tabelle '$TABLE_NAME' gesetzt."
+    	   # Default-Route nur in der Routing-Tabelle setzen
+           ip route add default via "$gw" dev "$iface" table "$TABLE_NAME" 2>/dev/null || true
+           echo "🛣️  Default-Route via $gw in Tabelle '$TABLE_NAME' gesetzt."
 
-            # ip rule hinzufügen: Traffic mit Quelle der IP geht über eigene Tabelle
-            SRC_IP=$(echo "$ip_cidr" | cut -d'/' -f1)
-            ip rule add from "$SRC_IP" table "$TABLE_NAME" priority 1000 2>/dev/null || true
-            echo "🔀 ip rule für Quelle $SRC_IP zur Tabelle '$TABLE_NAME' hinzugefügt."
-        fi
+    	   # ip rule hinzufügen: Traffic mit Quelle der IP geht über eigene Tabelle
+    	   SRC_IP=$(echo "$ip_cidr" | cut -d'/' -f1)
+    	   ip rule add from "$SRC_IP" table "$TABLE_NAME" priority 1000 2>/dev/null || true
+    	   echo "🔀 ip rule für Quelle $SRC_IP zur Tabelle '$TABLE_NAME' hinzugefügt."
+
+    	   # MARK aus IP ableiten (z. B. 192.168.100.x → 100)
+    	   MARK=$(echo "$SRC_IP" | cut -d'.' -f3)
+    	   if [ -n "$MARK" ]; then
+               ip rule add fwmark "$MARK" table "$TABLE_NAME" priority 1001 2>/dev/null || true
+               echo "🏷️  ip rule für fwmark $MARK → Tabelle '$TABLE_NAME' hinzugefügt."
+    	   fi
+	fi
 
         # In /etc/network/interfaces schreiben
         {

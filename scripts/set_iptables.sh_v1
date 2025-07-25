@@ -1,0 +1,59 @@
+#!/bin/sh
+
+RULES_FILE="/etc/iptables/rules.v4"
+
+# Clean existing rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+
+# Set default policies
+iptables -P INPUT DROP
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# Interfaces erkennen (alle mit IP außer lo)
+VPN_INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
+
+# NAT für alle VPN-Interfaces
+for iface in $VPN_INTERFACES; do
+    iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+done
+
+# Erlaube localhost
+iptables -A INPUT -i lo -j ACCEPT
+
+# Eingehend erlauben: SSH, Ping, HTTP, HTTPS
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT   # SSH
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT  # HTTPS
+iptables -A INPUT -p icmp --icmp-type 8 -j ACCEPT  # Ping
+
+# Verbindungstracking
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -s 192.168.0.0/16 -j ACCEPT
+
+# MARKS setzen anhand IP-Adressen
+# Beispiel: 192.168.100.X → MARK 100, 192.168.200.X → MARK 200, usw.
+for i in $(seq 100 200); do
+    iptables -t mangle -A PREROUTING -s 192.168.$i.0/24 -j MARK --set-mark $i
+    ip rule add fwmark $i table vpn$i 2>/dev/null
+done
+
+# Regeln speichern
+/etc/init.d/iptables save
+echo "✅ iptables-Regeln gespeichert."
+
+# iptables-Service aktivieren und starten
+if rc-service iptables status >/dev/null 2>&1; then
+    rc-service iptables restart
+else
+    rc-update add iptables default
+    rc-service iptables start
+fi
+
+echo "✅ iptables-Service gestartet und zum Default-Runlevel hinzugefügt."
